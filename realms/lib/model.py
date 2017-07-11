@@ -7,8 +7,10 @@ from sqlalchemy import not_, and_
 
 from realms import db
 
+from sqlalchemy_utils import Timestamp
 
-class Model(db.Model):
+
+class Model(Timestamp, db.Model):
     """Base SQLAlchemy Model for automatic serialization and
     deserialization of columns and nested relationships.
 

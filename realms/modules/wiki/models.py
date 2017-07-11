@@ -9,9 +9,82 @@ import yaml
 from dulwich.object_store import tree_lookup_path
 from dulwich.repo import Repo, NotGitRepository
 
-from realms import cache
+from realms import cache, db
 from realms.lib.hook import HookMixin
 from realms.lib.util import cname_to_filename, filename_to_cname
+from realms.lib.model import Model
+
+import subprocess
+
+
+class Commit(Model, db.Model):
+    __tablename__ = 'commits'
+    # type = 'local'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128))
+    filename = db.Column(db.String(128))
+    sha = db.Column(db.String(128))
+    wiki = db.Column(db.String())
+    username = db.Column(db.String(128))
+    email = db.Column(db.String(128))
+    message = db.Column(db.String(128))
+    approved = db.Column(db.Boolean())
+    approved_by = db.Column(db.String(128))
+    commited = db.Column(db.Boolean())
+
+    @staticmethod
+    def create(name, filename, sha, diff, username, email, message):
+        u = Commit()
+        u.name = name
+        u.filename = filename
+        u.sha = sha
+        u.diff = diff
+        u.username = username
+        u.email = email
+        u.message = message
+        u.save()
+        db.session.commit()
+
+
+class Page(Model, db.Model):
+    __tablename__ = 'pages'
+    # type = 'local'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128))
+    sha = db.Column(db.String(128))
+    wiki = db.Column(db.String())
+
+    @staticmethod
+    def create(name, sha, wiki):
+        u = Page()
+        u.name = name
+        u.sha = sha
+        u.wiki = wiki
+        u.save()
+        db.session.commit()
+
+    @staticmethod
+    def update(name, sha, wiki):
+        try:
+            u = db.session.query(Page).filter(
+                Page.name == name).one()
+
+            u.name = name
+            u.sha = sha
+            u.wiki = wiki
+            u.save()
+            db.session.commit()
+
+
+        except:
+            # Create Item
+            print 'Failed to update'
+            Page.create(name, sha, wiki)
+
+
+"""
+content, name, email, message)
+"""
 
 
 class PageNotFound(Exception):
@@ -47,6 +120,7 @@ class Wiki(HookMixin):
         :param files: list of file names that will be staged for commit
         :return:
         """
+        print "commit"
         if isinstance(name, unicode):
             name = name.encode('utf-8')
         if isinstance(email, unicode):
@@ -58,6 +132,31 @@ class Wiki(HookMixin):
         return self.repo.do_commit(message=message,
                                    committer=committer,
                                    author=author)
+
+    def push(commit, approved_by):
+        """Commit to the underlying git repo.
+
+        :param name: Committer name
+        :param email: Committer email
+        :param message: Commit message
+        :param files: list of file names that will be staged for commit
+        :return:
+        """
+        print commit
+
+        output = subprocess.check_output(["git", "pull"])
+        print output
+
+        output = subprocess.check_output(["git", "rebase -i "+commit])
+        print output
+
+        output = subprocess.check_output([":x"])
+        print output
+
+        output = subprocess.check_output(["git", "push origin "+commit+":master"])
+        print output
+
+
 
     def get_page(self, name, sha='HEAD'):
         """Get page data, partials, commit info.
@@ -89,6 +188,14 @@ class Wiki(HookMixin):
 
 
 class WikiPage(HookMixin):
+    __tablename__ = 'pages'
+    # type = 'local'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128))
+    filename = db.Column(db.String(128))
+    sha = db.Column(db.String(128))
+    wiki = db.Column(db.String())
+
     def __init__(self, name, wiki, sha='HEAD'):
         self.name = name
         self.filename = cname_to_filename(name)
@@ -102,8 +209,14 @@ class WikiPage(HookMixin):
         if cached:
             return cached
 
-        mode, sha = tree_lookup_path(self.wiki.repo.get_object, self.wiki.repo[self.sha].tree, self.filename)
+        mode, sha = tree_lookup_path(self.wiki.repo.get_object, self.wiki.repo[
+                                     self.sha].tree, self.filename)
         data = self.wiki.repo[sha].data
+        # print "cache_key"
+        # print cache_key
+        # print "data"
+        # print data
+        # print "e"
         cache.set(cache_key, data)
         return data
 
@@ -119,7 +232,8 @@ class WikiPage(HookMixin):
 
         """
         cache_head = []
-        cache_tail = cache.get(self._cache_key('history')) or [{'_cache_missing': True}]
+        cache_tail = cache.get(self._cache_key('history')) or [
+            {'_cache_missing': True}]
         while True:
             if not cache_tail:
                 return
@@ -130,7 +244,7 @@ class WikiPage(HookMixin):
                 else:
                     cache_head.append(cached_rev)
                     yield cached_rev
-            cache_tail = cache_tail[index+1:]
+            cache_tail = cache_tail[index + 1:]
 
             start_sha = cached_rev.get('sha')
             end_sha = cache_tail[0].get('sha') if cache_tail else None
@@ -141,7 +255,8 @@ class WikiPage(HookMixin):
                     'sha': rev['sha'],
                     'filename': rev['new_filename']
                 }
-                cache.set(self._cache_key('history'), cache_head + [placeholder] + cache_tail)
+                cache.set(self._cache_key('history'),
+                          cache_head + [placeholder] + cache_tail)
                 yield rev
             cache.set(self._cache_key('history'), cache_head + cache_tail)
 
@@ -157,7 +272,8 @@ class WikiPage(HookMixin):
                                                 exclude=end_sha,
                                                 follow=True))
         if start_sha:
-            # If we are not starting from HEAD, we already have the start commit
+            # If we are not starting from HEAD, we already have the start
+            # commit
             next(walker)
         filename = self.filename
         for entry in walker:
@@ -168,7 +284,8 @@ class WikiPage(HookMixin):
                     change_type = change.type
                     break
 
-            author_name, author_email = entry.commit.author.rstrip('>').split('<')
+            author_name, author_email = entry.commit.author.rstrip(
+                '>').split('<')
             r = dict(author=author_name.strip(),
                      author_email=author_email,
                      time=entry.commit.author_time,
@@ -285,7 +402,8 @@ class WikiPage(HookMixin):
         if not message:
             message = "Moved %s to %s" % (self.name, new_name)
 
-        os.rename(os.path.join(self.wiki.path, old_filename), os.path.join(self.wiki.path, new_filename))
+        os.rename(os.path.join(self.wiki.path, old_filename),
+                  os.path.join(self.wiki.path, new_filename))
         commit = self.wiki.commit(name=username,
                                   email=email,
                                   message=message,
@@ -301,6 +419,7 @@ class WikiPage(HookMixin):
         return commit
 
     def write(self, content, message=None, username=None, email=None):
+        # print self.sha
         """Write page to git repo
 
         :param content: Content of page.
@@ -310,7 +429,8 @@ class WikiPage(HookMixin):
         :return: Git commit sha1.
         """
         assert self.sha == 'HEAD'
-        dirname = posixpath.join(self.wiki.path, posixpath.dirname(self.filename))
+        dirname = posixpath.join(
+            self.wiki.path, posixpath.dirname(self.filename))
 
         if not os.path.exists(dirname):
             os.makedirs(dirname)
@@ -327,6 +447,9 @@ class WikiPage(HookMixin):
                                email=email,
                                message=message,
                                files=[self.filename])
+        Page.update(self.name, ret, content)
+        Commit.create(self.name, None, ret,
+                      content, username, email, message)
 
         old_history = cache.get(self._cache_key('history'))
         self._invalidate_cache(save_history=old_history)
@@ -367,8 +490,10 @@ class WikiPage(HookMixin):
     def __nonzero__(self):
         # Verify this file is in the tree for the given commit sha
         try:
-            tree_lookup_path(self.wiki.repo.get_object, self.wiki.repo[self.sha].tree, self.filename)
+            tree_lookup_path(self.wiki.repo.get_object, self.wiki.repo[
+                             self.sha].tree, self.filename)
         except KeyError:
-            # We'll get a KeyError if self.sha isn't in the repo, or if self.filename isn't in the tree of our commit
+            # We'll get a KeyError if self.sha isn't in the repo, or if
+            # self.filename isn't in the tree of our commit
             return False
         return True
